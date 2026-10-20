@@ -1,0 +1,37 @@
+{
+  "name": "pi-harness2",
+  "version": "0.1.0",
+  "description": "Harness\u00b2 as a Pi extension: recursive harness optimization for the task in front of you",
+  "type": "module",
+  "license": "Apache-2.0",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "harness",
+    "harness2",
+    "recursive-agent-harnessing"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "^5.7.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "files": [
+    "src",
+    "HARNESS2.md",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
+  ]
+}
