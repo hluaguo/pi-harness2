@@ -74,15 +74,44 @@ modified either way.
 
 Requires Pi 1.3 or newer.
 
-```bash
-# one invocation, no install
-pi -e /path/to/pi-harness2/src/index.ts
+From GitHub:
 
-# or install the local package
-pi install /path/to/pi-harness2
+```bash
+pi install git:github.com/hluaguo/pi-harness2
 ```
 
-There is no build step. The package manifest points at `src/index.ts`.
+From a local clone:
+
+```bash
+git clone git@github.com:hluaguo/pi-harness2.git
+cd pi-harness2
+pi install ./
+```
+
+Add `-l` to either command to write the package into the current project's
+`.pi/settings.json` instead of your personal settings.
+
+To try it for one invocation without installing:
+
+```bash
+# a package directory follows normal package discovery
+pi -e ./pi-harness2
+
+# or load the entry file directly
+pi -e ./pi-harness2/src/index.ts
+```
+
+Pi supplies `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` to
+extensions. The package has no other runtime dependencies and no build step. Its
+manifest points at `src/index.ts`.
+
+Remove it with the same source you installed:
+
+```bash
+pi remove ./pi-harness2
+# or
+pi remove git:github.com/hluaguo/pi-harness2
+```
 
 ## Quick start
 
