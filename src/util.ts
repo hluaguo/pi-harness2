@@ -1,6 +1,6 @@
 /** Small filesystem, process, hash, and concurrency helpers. */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -203,6 +203,64 @@ export function run(
 		stdout: p.stdout ?? "",
 		stderr: p.stderr ?? String(p.error ?? ""),
 	};
+}
+
+export interface ShellResult {
+	code: number;
+	stdout: string;
+	stderr: string;
+	durationMs: number;
+	timedOut: boolean;
+}
+
+/** Run a user-supplied shell command with a timeout and capped output. */
+export function runShell(
+	command: string,
+	cwd: string,
+	timeoutMs: number,
+	signal?: AbortSignal,
+): Promise<ShellResult> {
+	const started = Date.now();
+	const isWindows = process.platform === "win32";
+	const shell = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+	const args = isWindows ? ["/d", "/s", "/c", command] : ["-lc", command];
+	return new Promise((resolve) => {
+		let stdout = "";
+		let stderr = "";
+		let timedOut = false;
+		let settled = false;
+		const child = spawn(shell, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGTERM");
+			setTimeout(() => {
+				if (child.exitCode === null) child.kill("SIGKILL");
+			}, 5_000).unref?.();
+		}, timeoutMs);
+		const onAbort = () => child.kill("SIGTERM");
+		signal?.addEventListener("abort", onAbort, { once: true });
+		const finish = (code: number, error = "") => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", onAbort);
+			resolve({
+				code,
+				stdout: truncate(stdout, 100_000),
+				stderr: truncate(`${stderr}${error ? `\n${error}` : ""}`, 100_000),
+				durationMs: Date.now() - started,
+				timedOut,
+			});
+		};
+		child.stdout?.on("data", (d: Buffer) => {
+			if (stdout.length < 120_000) stdout += d.toString("utf8");
+		});
+		child.stderr?.on("data", (d: Buffer) => {
+			if (stderr.length < 120_000) stderr += d.toString("utf8");
+		});
+		child.on("close", (code) => finish(code ?? (timedOut ? 124 : 1)));
+		child.on("error", (err) => finish(1, `${err.name}: ${err.message}`));
+	});
 }
 
 export async function mapLimit<T, R>(

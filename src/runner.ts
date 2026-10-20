@@ -23,7 +23,7 @@ import {
 	writeJson,
 	writeText,
 } from "./util.ts";
-import { extractDeliverable, type WorkspaceInfo } from "./workspace.ts";
+import { extractDeliverable, verifyWorkspace, type WorkspaceInfo } from "./workspace.ts";
 import { registerChild } from "./processes.ts";
 
 export interface ProbeOptions {
@@ -299,6 +299,30 @@ export async function runProbe(opts: ProbeOptions): Promise<RunView> {
 		renderTrajectory(label, task, resultModel ?? model, items, cfg.obsTrunc),
 	);
 	const deliverable = extractDeliverable(workspace, task, deliverableDir);
+	let verify: RunView["verify"];
+	if (task.verify?.trim()) {
+		verify = await verifyWorkspace(
+			workspaceDir,
+			task.verify,
+			cfg.verifyTimeoutMs,
+			opts.signal,
+		);
+		writeJson(path.join(rolloutDir, "verify.json"), verify);
+		writeText(
+			path.join(rolloutDir, "verify.txt"),
+			[
+				`$ ${verify.command}`,
+				`exit: ${verify.exitCode}${verify.timedOut ? " (timed out)" : ""}`,
+				"",
+				"## stdout",
+				verify.stdout || "(empty)",
+				"",
+				"## stderr",
+				verify.stderr || "(empty)",
+				"",
+			].join("\n"),
+		);
+	}
 
 	const wallS = Math.round((Date.now() - started) / 100) / 10;
 	const view: RunView = {
@@ -319,6 +343,7 @@ export async function runProbe(opts: ProbeOptions): Promise<RunView> {
 		usage,
 		wallS,
 		changedFiles: deliverable.changedFiles,
+		verify,
 	};
 	writeJson(path.join(rolloutDir, "run.json"), {
 		...view,

@@ -10,7 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { H2Config, TaskSpec } from "./types.ts";
+import type { H2Config, TaskSpec, VerifyResult } from "./types.ts";
 import {
 	ensureDir,
 	isDir,
@@ -18,6 +18,7 @@ import {
 	relPosix,
 	rmrf,
 	run,
+	runShell,
 	safeJoin,
 	truncate,
 	writeText,
@@ -318,6 +319,24 @@ export function extractDeliverable(
 		filesDir,
 		changedFiles: [...changed].sort(),
 		delivered: task.deliverables.length ? declaredOk : changed.size > 0,
+	};
+}
+
+export async function verifyWorkspace(
+	dir: string,
+	command: string,
+	timeoutMs: number,
+	signal?: AbortSignal,
+): Promise<VerifyResult> {
+	const result = await runShell(command, dir, timeoutMs, signal);
+	return {
+		command,
+		ok: result.code === 0 && !result.timedOut,
+		exitCode: result.code,
+		stdout: result.stdout,
+		stderr: result.stderr,
+		durationMs: result.durationMs,
+		timedOut: result.timedOut,
 	};
 }
 

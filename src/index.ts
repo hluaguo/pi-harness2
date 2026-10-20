@@ -29,6 +29,7 @@ import {
 } from "./active.ts";
 import { killAllChildren } from "./processes.ts";
 import { clearRunWidget, setFailedStatus, setIdleStatus, updateRunStatus } from "./status.ts";
+import { exportHarness } from "./materialize.ts";
 import {
 	ensureDir,
 	exists,
@@ -326,6 +327,7 @@ function helpText(): string {
 /harness2 report [run]           show the latest report
 /harness2 adopt [run] [label]    copy a final harness to .harness2/adopted/
 /harness2 adopt [run] [label] --use
+/harness2 export [run] [label]   export a final as a native Pi package
 /harness2 use [run] [label]      apply a harness to this project
 /harness2 use --off              stop applying the active harness
 /harness2 status                 show the active harness and latest run
@@ -470,7 +472,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("harness2", {
 		description: "Harness²: recursively refine the harness for a task",
 		getArgumentCompletions: (prefix) => {
-			const commands = ["run", "init", "list", "report", "adopt", "use", "status", "help"];
+			const commands = ["run", "init", "list", "report", "adopt", "export", "use", "status", "help"];
 			const filtered = commands.filter((c) => c.startsWith(prefix.trim()));
 			return filtered.length ? filtered.map((c) => ({ value: c, label: c })) : null;
 		},
@@ -538,6 +540,7 @@ export default function (pi: ExtensionAPI) {
 								.filter(Boolean)
 						: undefined,
 					yardstick: flagString(parsed, "yardstick"),
+					verify: flagString(parsed, "verify"),
 					sourceDir: flagString(parsed, "source"),
 				});
 				ctx.ui.notify(`Created task \`${task.id}\` in ${task.dir}`, "info");
@@ -575,6 +578,46 @@ export default function (pi: ExtensionAPI) {
 				}
 				if (ctx.mode === "tui") await ctx.ui.editor(`Report ${path.basename(runDir)}`, report);
 				else ctx.ui.notify(report.slice(0, 6000), "info");
+				return;
+			}
+			if (sub === "export") {
+				const runDir = resolveRunDir(cfg, parsed.positional[0]);
+				const label = parsed.positional[1] || adoptedLabelFromResult(runDir);
+				if (!label) throw new Error("no final label; pass one explicitly");
+				const harnessDir = path.join(runDir, "harnesses", label);
+				const tree = readTree(harnessDir);
+				if (!Object.keys(tree).length) throw new Error(`harness \`${label}\` is empty`);
+				validate(tree, { alwaysOnMax: cfg.alwaysOnMax, compilePython: false });
+				const data = readJson<any>(path.join(runDir, "result.json"), {});
+				const task: TaskSpec = {
+					id: data?.task?.id ?? path.basename(runDir),
+					prompt: data?.task?.prompt ?? "",
+					domain: data?.task?.domain ?? "default",
+					deliverables: [],
+					leakGlobs: [],
+					yardstick: "",
+				};
+				const exported = exportHarness({
+					cfg,
+					task,
+					tree,
+					runId: path.basename(runDir),
+					label,
+					outDir: flagString(parsed, "out"),
+					force: flagBool(parsed, "force"),
+				});
+				ctx.ui.notify(
+					[
+						`Exported \`${label}\` as a Pi package:`,
+						exported.dir,
+						"",
+						`Install: ${exported.installCommand}`,
+						`Remove:  pi remove "${exported.dir}"`,
+						"",
+						"Plugins in the package are executable code; review them before installing.",
+					].join("\n"),
+					"info",
+				);
 				return;
 			}
 			if (sub === "adopt" || sub === "use") {

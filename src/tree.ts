@@ -21,6 +21,7 @@ import {
 	readText,
 	relPosix,
 	safeJoin,
+	sha256,
 	writeText,
 } from "./util.ts";
 
@@ -307,6 +308,13 @@ export interface TreeDiff {
 	removed: string[];
 	modified: string[];
 	alwaysOnCharDelta: number;
+}
+
+export function hashTree(tree: Tree): string {
+	const entries = Object.keys(tree)
+		.sort()
+		.map((rel) => [rel, tree[rel]] as const);
+	return sha256(JSON.stringify(entries));
 }
 
 export function diffSummary(before: Tree, after: Tree): TreeDiff {

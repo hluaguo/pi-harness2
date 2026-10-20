@@ -78,6 +78,8 @@ export function loadConfig(cwd: string, overrides: Partial<H2Config> = {}): H2Co
 			1,
 			overrides.transportAttempts ?? envInt("HARNESS2_TRANSPORT_ATTEMPTS", 2),
 		),
+		verifyTimeoutMs: overrides.verifyTimeoutMs ?? envInt("HARNESS2_VERIFY_TIMEOUT", 600) * 1000,
+		earlyStop: overrides.earlyStop ?? envBool("HARNESS2_EARLY_STOP", false),
 	};
 }
 

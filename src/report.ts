@@ -55,10 +55,12 @@ export function writeReport(
 		)
 		.join("\n");
 	const rolloutRows = [...allRuns.values()]
-		.map(
-			(r) =>
-				`| \`${r.label}\` | ${r.ok ? "ok" : "failed"} | ${r.delivered ? "yes" : "no"} | ${r.changedFiles.length} | ${r.usage.turns} | $${r.usage.cost.toFixed(4)} | ${r.error ? r.error.replace(/\|/g, "\\|").slice(0, 120) : ""} |`,
-		)
+		.map((r) => {
+			const verify = r.verify ? (r.verify.ok ? "PASS" : "FAIL") : "—";
+			const cost = r.reusedFrom ? "reused" : `$${r.usage.cost.toFixed(4)}`;
+			const source = r.reusedFrom ? `from \`${r.reusedFrom}\`` : "fresh";
+			return `| \`${r.label}\` | ${r.ok ? "ok" : "failed"} | ${r.delivered ? "yes" : "no"} | ${verify} | ${r.changedFiles.length} | ${r.usage.turns} | ${cost} | ${source} | ${r.error ? r.error.replace(/\|/g, "\\|").slice(0, 120) : ""} |`;
+		})
 		.join("\n");
 	const diffText = Object.keys({ ...baseTree, ...adoptedTree })
 		.sort()
@@ -78,6 +80,7 @@ export function writeReport(
 		`- improver model: \`${cfg.improverModel ?? cfg.model ?? "current"}\``,
 		`- costs recorded: $${costs.toFixed(4)}`,
 		`- adopted: \`${adoptedLabel || "(none)"}\``,
+		...(modeResult.stoppedEarly ? [`- stopped early: ${modeResult.stoppedEarly}`] : []),
 		"",
 		"## The work",
 		"",
@@ -85,8 +88,8 @@ export function writeReport(
 		"",
 		"## Base probes",
 		"",
-		"| label | ok | delivered | changed files | turns | cost | error |",
-		"|---|---|---|---|---|---|---|",
+		"| label | ok | delivered | verify | changed files | turns | cost | source | error |",
+		"|---|---|---|---|---|---|---|---|---|",
 		rolloutRows,
 		"",
 		"## Improvement stages",
@@ -160,6 +163,7 @@ export function writeReport(
 			finals: modeResult.finals,
 			base: modeResult.base,
 			similarity: modeResult.similarity,
+			stoppedEarly: modeResult.stoppedEarly ?? null,
 			stages: modeResult.stages.map((s) => ({
 				label: s.label,
 				dim: s.dim,
@@ -185,6 +189,9 @@ export function writeReport(
 					wallS: r.wallS,
 					model: r.model,
 					error: r.error,
+					reusedFrom: r.reusedFrom ?? null,
+					artifactKey: r.artifactKey ?? null,
+					verify: r.verify ?? null,
 					paths: {
 						events: r.eventsPath,
 						trajectory: r.trajectoryPath,
@@ -201,6 +208,7 @@ export function writeReport(
 			cost: selection.cost,
 			error: selection.error,
 			pools: selection.pools,
+			verified: selection.verified ?? null,
 		},
 		adopted: {
 			label: adoptedLabel,

@@ -22,6 +22,7 @@ import {
 	alwaysOnText,
 	autotrigger,
 	diversity,
+	hashTree,
 	isUnchanged,
 	readTree,
 	validate,
@@ -46,6 +47,7 @@ import {
 	ensureDir,
 	isDir,
 	mapLimit,
+	readText,
 	rmrf,
 	slugify,
 	writeText,
@@ -99,6 +101,7 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 	const proposer = new Proposer(cfg, improver, path.join(runDir, "events"));
 	const errors: string[] = [];
 	const progress = opts.onProgress ?? (() => {});
+	const rolloutCache = new Map<string, RunView>();
 
 	progress("creating base harness", 0.01);
 	writeTree(baseTree, path.join(runDir, "harnesses", "base"));
@@ -112,6 +115,9 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 		if (!baseRuns[i].ok) errors.push(`${baseRuns[i].label}: ${baseRuns[i].error}`);
 	}
 
+	const noSignal = cfg.earlyStop ? baseNoSignal(baseRuns) : undefined;
+	if (noSignal) progress(`stopping early: ${noSignal}`, 0.5);
+
 	const libraryForTask =
 		cfg.libraryScope === "run"
 			? libraryRoot(path.join(runDir, "library"), task.domain)
@@ -119,7 +125,21 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 	const libCtx = libraryContextDir(libraryForTask);
 
 	let modeResult: ModeResult | undefined;
-	if (cfg.mode === "parallel") {
+	if (noSignal) {
+		const first = baseRuns[0];
+		modeResult = {
+			mode: cfg.mode,
+			taskId: task.id,
+			k: cfg.k,
+			stages: [],
+			trees: { [first.label]: baseTree },
+			rollouts: Object.fromEntries(baseRuns.map((r) => [r.label, r])),
+			finals: [first.label],
+			base: baseRuns.map((r) => r.label),
+			similarity: { n: 1, nDistinct: 1, meanLineJaccard: 1 },
+			stoppedEarly: noSignal,
+		};
+	} else if (cfg.mode === "parallel") {
 		modeResult = await runParallel(baseRuns);
 	} else {
 		modeResult = await runSequential(baseRuns);
@@ -137,6 +157,7 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 		finals: finalRuns.map((r) => ({
 			label: r.label,
 			deliverableTextPath: r.deliverableTextPath,
+			verify: r.verify,
 		})),
 		proposer,
 		signal: opts.signal,
@@ -154,7 +175,7 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 
 	let reflection = "";
 	let libraryEntry: string | undefined;
-	if (cfg.reflect) {
+	if (cfg.reflect && !modeResult.stoppedEarly) {
 		progress("reflecting on the round", 0.94);
 		try {
 			const reflectionReply = await reflect(
@@ -184,7 +205,10 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 	}
 
 	const uniqueRuns = new Map<string, RunView>();
-	for (const run of [...baseRuns, ...Object.values(modeResult.rollouts)]) uniqueRuns.set(run.label, run);
+	for (const run of [...baseRuns, ...Object.values(modeResult.rollouts)]) {
+		const key = run.artifactKey ?? run.label;
+		if (!uniqueRuns.has(key)) uniqueRuns.set(key, run);
+	}
 	const costs =
 		[...uniqueRuns.values()].reduce((n, r) => n + r.usage.cost, 0) +
 		modeResult.stages.reduce((n, s) => n + s.usd, 0) +
@@ -205,6 +229,17 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 	/* ------------------------------------------------------------------ */
 
 	async function roll(label: string, tree: Tree): Promise<RunView> {
+		const artifactKey = hashTree(tree);
+		const cached = rolloutCache.get(artifactKey);
+		if (cached) {
+			writeTree(tree, path.join(runDir, "harnesses", label));
+			return {
+				...cached,
+				label,
+				artifactKey,
+				reusedFrom: cached.reusedFrom ?? cached.label,
+			};
+		}
 		const harnessDir = writeTree(tree, path.join(runDir, "harnesses", label));
 		const wsDir = path.join(runDir, "workspaces", label);
 		try {
@@ -224,6 +259,8 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 				onProgress: (m) => progress(m),
 			});
 			if (!cfg.keepWorkspaces) removeWorkspace(ws);
+			run.artifactKey = artifactKey;
+			if (run.ok) rolloutCache.set(artifactKey, run);
 			return run;
 		} catch (err) {
 			const rolloutDir = path.join(runDir, "rollouts", label);
@@ -247,8 +284,38 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 				usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
 				wallS: 0,
 				changedFiles: [],
+				artifactKey,
 			};
 		}
+	}
+
+	function baseNoSignal(runs: RunView[]): string | undefined {
+		if (runs.length < 2 || !runs.every((r) => r.ok && r.delivered)) return undefined;
+		const signatures = runs.map((r) => readText(r.deliverableTextPath, "").trim());
+		if (signatures.some((s) => !s)) return undefined;
+		if (new Set(signatures).size > 1) return undefined;
+		return `${runs.length} base probes delivered identical artifacts; no behavioral contrast to act on`;
+	}
+
+	function syntheticStage(
+		label: string,
+		dim: StageResult["dim"],
+		tree: Tree,
+		notes: string,
+	): StageResult {
+		return {
+			label,
+			dim,
+			tree: { ...tree },
+			keptBase: true,
+			fellBack: false,
+			error: "",
+			notes,
+			usd: 0,
+			wallS: 0,
+			attempts: 0,
+			cached: false,
+		};
 	}
 
 	async function runStage(args: {
@@ -427,24 +494,40 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 			run: result.rollouts[s.label],
 		}));
 		const decisions = Object.fromEntries(stages.map((s) => [s.label, s.notes || s.error]));
-		progress(`composing ${cfg.k} final harness${cfg.k === 1 ? "" : "es"}`, 0.55);
-		const aggs = await mapLimit(
-			Array.from({ length: cfg.k }, (_, i) => `agg${i + 1}`),
-			cfg.concurrency,
-			(label) => {
-				const index = Number.parseInt(label.slice(3), 10);
-				return runStage({
-					label,
-					dim: "AGG",
-					job: aggregate(profile, { k: cfg.k, index }),
-					fallback: baseTree,
-					harness: baseTree,
-					rollouts: base,
-					pool,
-					decisions,
-				});
-			},
+		const noCandidateChange = stages.every((s) => isUnchanged(baseTree, s.tree));
+		const aggLabels = Array.from({ length: cfg.k }, (_, i) => `agg${i + 1}`);
+		progress(
+			noCandidateChange
+				? "skipping composition: every candidate kept the base"
+				: `composing ${cfg.k} final harness${cfg.k === 1 ? "" : "es"}`,
+			0.55,
 		);
+		const aggs = noCandidateChange
+			? aggLabels.map((label) =>
+					syntheticStage(
+						label,
+						"AGG",
+						baseTree,
+						"skipped composition: every dimension candidate was identical to the base",
+					),
+				)
+			: await mapLimit(aggLabels, cfg.concurrency, (label) => {
+					const index = Number.parseInt(label.slice(3), 10);
+					return runStage({
+						label,
+						dim: "AGG",
+						job: aggregate(profile, { k: cfg.k, index }),
+						fallback: baseTree,
+						harness: baseTree,
+						rollouts: base,
+						pool,
+						decisions,
+					});
+				});
+		if (noCandidateChange) {
+			result.stoppedEarly =
+				"every dimension candidate was identical to the base; composition skipped";
+		}
 		for (const stage of aggs) {
 			result.stages.push(stage);
 			result.trees[stage.label] = stage.tree;
@@ -470,6 +553,7 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 		let current = baseTree;
 		let history: PoolEntry[] = [];
 		const decisions: Record<string, string> = {};
+		const finals: string[] = [];
 		for (let t = 1; t <= cfg.k; t++) {
 			const fraction = 0.15 + (0.65 * (t - 1)) / cfg.k;
 			progress(`round ${t}/${cfg.k}: proposing INV and DOM`, fraction);
@@ -511,32 +595,51 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 				})),
 			];
 			const compLabel = `c${t}`;
-			progress(`round ${t}/${cfg.k}: composing checkpoint ${t}`, fraction + 0.15);
-			const comp = await runStage({
-				label: compLabel,
-				dim: "COMPOSE",
-				job:
-					cfg.k === 1
-						? aggregate(profile, { k: 1, index: 1 })
-						: composeRound(profile, { t, k: cfg.k }),
-				fallback: current,
-				harness: current,
-				rollouts: base,
-				pool: roundPool,
-				decisions,
-			});
+			const noRoundChange = stages.every((s) => isUnchanged(current, s.tree));
+			progress(
+				noRoundChange
+					? `round ${t}/${cfg.k}: skipping composition, both candidates kept the checkpoint`
+					: `round ${t}/${cfg.k}: composing checkpoint ${t}`,
+				fraction + 0.15,
+			);
+			const comp = noRoundChange
+				? syntheticStage(
+						compLabel,
+						"COMPOSE",
+						current,
+						"skipped composition: both candidates were identical to the current checkpoint",
+					)
+				: await runStage({
+						label: compLabel,
+						dim: "COMPOSE",
+						job:
+							cfg.k === 1
+								? aggregate(profile, { k: 1, index: 1 })
+								: composeRound(profile, { t, k: cfg.k }),
+						fallback: current,
+						harness: current,
+						rollouts: base,
+						pool: roundPool,
+						decisions,
+					});
 			result.stages.push(comp);
 			result.trees[compLabel] = comp.tree;
 			decisions[compLabel] = comp.notes || comp.error;
 			const compRun = await roll(compLabel, comp.tree);
 			result.rollouts[compLabel] = compRun;
+			finals.push(compLabel);
 			history = [
 				...roundPool,
 				{ label: compLabel, harnessDir: path.join(runDir, "harnesses", compLabel), run: compRun },
 			];
 			current = comp.tree;
+			if (noRoundChange) {
+				result.stoppedEarly =
+					"both dimension candidates kept the checkpoint; remaining rounds skipped";
+				break;
+			}
 		}
-		result.finals = Array.from({ length: cfg.k }, (_, i) => `c${i + 1}`);
+		result.finals = finals;
 		result.similarity = diversity(
 			Object.fromEntries(result.finals.map((label) => [label, result.trees[label] ?? baseTree])),
 		);

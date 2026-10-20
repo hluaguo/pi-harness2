@@ -22,10 +22,22 @@ export interface TaskSpec {
 	leakGlobs: string[];
 	/** Optional description of good process, never a score. */
 	yardstick: string;
+	/** Optional deterministic check run in each probe workspace. Used for selection, never adaptation. */
+	verify?: string;
 	/** Optional directory of read-only source material. */
 	sourceDir?: string;
 	/** Directory holding task.json/task.md. */
 	dir?: string;
+}
+
+export interface VerifyResult {
+	command: string;
+	ok: boolean;
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	durationMs: number;
+	timedOut: boolean;
 }
 
 export interface RunView {
@@ -53,6 +65,11 @@ export interface RunView {
 	};
 	wallS: number;
 	changedFiles: string[];
+	verify?: VerifyResult;
+	/** Canonical hash of the harness tree that produced this run, for rollout dedup. */
+	artifactKey?: string;
+	/** Label whose rollout this one reused, when the trees were byte-identical. */
+	reusedFrom?: string;
 }
 
 export interface StageResult {
@@ -84,6 +101,7 @@ export interface ModeResult {
 		meanLineJaccard: number;
 	};
 	errors?: string[];
+	stoppedEarly?: string;
 }
 
 export interface LibraryExperience {
@@ -102,6 +120,11 @@ export interface SelectionResult {
 	cost: number;
 	pools: Array<{ id: string; label: string }>;
 	error: string;
+	verified?: {
+		gated: boolean;
+		passing: string[];
+		failing: string[];
+	};
 }
 
 export interface H2Config {
@@ -132,6 +155,8 @@ export interface H2Config {
 	select: "auto" | "ask" | "first";
 	proposerAttempts: number;
 	transportAttempts: number;
+	verifyTimeoutMs: number;
+	earlyStop: boolean;
 }
 
 export interface Progress {

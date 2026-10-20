@@ -4,26 +4,37 @@
  * Port of `core/selection.py`. Candidate ids are shuffled and anonymous; the
  * selector never sees a harness or a score. With one final this is trivial and
  * spends no session.
+ *
+ * If the task declares a deterministic `verify` command, only candidates that
+ * pass it enter the selector pool. Verification is a selection signal only: it
+ * is never written into the trajectory evidence the editors see.
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { H2Config, SelectionResult, TaskSpec } from "./types.ts";
+import type { H2Config, SelectionResult, TaskSpec, VerifyResult } from "./types.ts";
 import { Proposer, parseFenced } from "./proposer.ts";
 import { buildSelectionContext } from "./context.ts";
 import { profileOf, select } from "./prompts.ts";
-import { copyDir, readText, rmrf } from "./util.ts";
+import { copyDir, readText, rmrf, truncate } from "./util.ts";
 
 export interface SelectOptions {
 	cfg: H2Config;
 	task: TaskSpec;
 	runDir: string;
-	finals: Array<{ label: string; deliverableTextPath: string }>;
+	finals: Array<{ label: string; deliverableTextPath: string; verify?: VerifyResult }>;
 	proposer: Proposer;
 	signal?: AbortSignal;
 	ask?: (title: string, options: string[]) => Promise<string | undefined>;
 	onProgress?: (message: string) => void;
+}
+
+interface Candidate {
+	id: string;
+	label: string;
+	text: string;
+	verify?: VerifyResult;
 }
 
 function shuffle<T>(items: T[], seed: number | undefined): T[] {
@@ -43,6 +54,21 @@ function shuffle<T>(items: T[], seed: number | undefined): T[] {
 	return out;
 }
 
+function verificationBlock(v: VerifyResult): string {
+	return [
+		"## Verification",
+		"",
+		`- command: \`${v.command}\``,
+		`- result: ${v.ok ? "PASS" : v.timedOut ? "FAIL (timed out)" : "FAIL"}`,
+		`- exit code: ${v.exitCode}`,
+		"",
+		"```text",
+		truncate([v.stdout, v.stderr].filter(Boolean).join("\n"), 8_000) || "(no output)",
+		"```",
+		"",
+	].join("\n");
+}
+
 export async function runSelection(opts: SelectOptions): Promise<SelectionResult> {
 	const { cfg, task, finals, runDir } = opts;
 	if (!finals.length) {
@@ -56,34 +82,68 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 			error: "no finals were produced",
 		};
 	}
-	const candidates = shuffle(
-		finals.map((f) => ({
-			label: f.label,
-			text: readText(f.deliverableTextPath, "(no deliverable produced)"),
-		})),
+
+	const candidates: Candidate[] = shuffle(
+		finals.map((f) => ({ label: f.label, text: readText(f.deliverableTextPath, "(no deliverable produced)"), verify: f.verify })),
 		cfg.seed,
 	).map((c, i) => ({ ...c, id: `c${i + 1}` }));
+	const poolsAll = candidates.map((x) => ({ id: x.id, label: x.label }));
 
-	if (candidates.length === 1 || cfg.select === "first") {
-		const c = candidates[0];
+	const hasVerification = candidates.some((c) => c.verify);
+	const passing = candidates.filter((c) => c.verify?.ok);
+	const failing = candidates.filter((c) => c.verify && !c.verify.ok);
+	const gated = hasVerification && passing.length > 0 && passing.length < candidates.length;
+	let pool = gated ? passing : candidates;
+	// If no candidate passes, the selector still decides, but sees every failure.
+	if (hasVerification && passing.length === 0) pool = candidates;
+
+	const verified = hasVerification
+		? {
+				gated,
+				passing: passing.map((c) => c.label),
+				failing: failing.map((c) => c.label),
+			}
+		: undefined;
+
+	if (pool.length === 1) {
+		const c = pool[0];
 		return {
 			ok: true,
 			chosenLabel: c.label,
 			chosenId: c.id,
-			reason: candidates.length === 1 ? "only one final candidate" : "selection set to first",
+			reason: hasVerification
+				? passing.length === 1
+					? "only candidate that passed the verification command"
+					: "only candidate"
+				: "only one final candidate",
 			cost: 0,
-			pools: candidates.map((x) => ({ id: x.id, label: x.label })),
+			pools: poolsAll,
 			error: "",
+			verified,
+		};
+	}
+
+	if (cfg.select === "first") {
+		const c = pool[0];
+		return {
+			ok: true,
+			chosenLabel: c.label,
+			chosenId: c.id,
+			reason: hasVerification ? "selection set to first (verification-gated)" : "selection set to first",
+			cost: 0,
+			pools: poolsAll,
+			error: "",
+			verified,
 		};
 	}
 
 	if (cfg.select === "ask" && opts.ask) {
 		const picked = await opts.ask(
 			"Harness²: choose the final to adopt",
-			candidates.map((c) => `${c.id} — ${c.label}`),
+			pool.map((c) => `${c.id} — ${c.label}`),
 		);
 		const id = picked?.split(" ")[0];
-		const c = candidates.find((x) => x.id === id);
+		const c = pool.find((x) => x.id === id);
 		if (c) {
 			return {
 				ok: true,
@@ -91,22 +151,32 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 				chosenId: c.id,
 				reason: "chosen by the user",
 				cost: 0,
-				pools: candidates.map((x) => ({ id: x.id, label: x.label })),
+				pools: poolsAll,
 				error: "",
+				verified,
 			};
 		}
 	}
 
+	const renderedPool = pool.map((c) => ({
+		id: c.id,
+		label: c.label,
+		text: c.verify ? `${verificationBlock(c.verify)}\n\n${c.text}` : c.text,
+	}));
 	const selectionRoot = path.join(runDir, "selection");
 	const selectionDir = path.join(selectionRoot, "context");
-	buildSelectionContext(selectionDir, task, candidates);
-	opts.onProgress?.(`selector: comparing ${candidates.length} finals`);
+	buildSelectionContext(selectionDir, task, renderedPool);
+	opts.onProgress?.(
+		`selector: comparing ${renderedPool.length} final${renderedPool.length === 1 ? "" : "s"}${
+			gated ? ` (${failing.length} failed verification)` : ""
+		}`,
+	);
 	const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "harness2-select-"));
 	copyDir(selectionDir, path.join(tempRoot, "context"));
-	let reply;
+	let reply: Awaited<ReturnType<Proposer["call"]>>;
 	try {
 		reply = await opts.proposer.call(
-			select(profileOf(task), candidates.length),
+			select(profileOf(task), renderedPool.length),
 			tempRoot,
 			"select",
 			{
@@ -126,14 +196,15 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 			chosenId: "",
 			reason: "",
 			cost: reply.costUsd,
-			pools: candidates.map((x) => ({ id: x.id, label: x.label })),
+			pools: poolsAll,
 			error: reply.error || "selector session failed",
+			verified,
 		};
 	}
 	const parsed = parseFenced(reply.text, "choice");
 	const chosen =
-		candidates.find((c) => c.id === parsed) ??
-		candidates.find((c) => new RegExp(`\\b${c.id}\\b`).test(reply.text));
+		pool.find((c) => c.id === parsed) ??
+		pool.find((c) => new RegExp(`\\b${c.id}\\b`).test(reply.text));
 	if (!chosen) {
 		return {
 			ok: false,
@@ -141,8 +212,9 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 			chosenId: "",
 			reason: reply.text.slice(-2000),
 			cost: reply.costUsd,
-			pools: candidates.map((x) => ({ id: x.id, label: x.label })),
+			pools: poolsAll,
 			error: `selector did not return a valid candidate id (got ${JSON.stringify(parsed)})`,
+			verified,
 		};
 	}
 	const why = /<why>([\s\S]*?)<\/why>/i.exec(reply.text)?.[1]?.trim() ?? "";
@@ -152,7 +224,8 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 		chosenId: chosen.id,
 		reason: why || reply.text.slice(-2000),
 		cost: reply.costUsd,
-		pools: candidates.map((x) => ({ id: x.id, label: x.label })),
+		pools: poolsAll,
 		error: "",
+		verified,
 	};
 }

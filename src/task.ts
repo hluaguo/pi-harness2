@@ -24,6 +24,7 @@ interface TaskFile {
 	deliverables?: string[];
 	leakGlobs?: string[];
 	yardstick?: string;
+	verify?: string;
 	sourceDir?: string;
 }
 
@@ -52,6 +53,7 @@ export function loadTaskFromDir(dir: string): TaskSpec {
 		deliverables: asStringArray(raw.deliverables),
 		leakGlobs: asStringArray(raw.leakGlobs),
 		yardstick: raw.yardstick?.trim() || "",
+		verify: raw.verify?.trim() || undefined,
 		sourceDir,
 		dir,
 	};
@@ -86,6 +88,7 @@ export function resolveTask(
 					deliverables: asStringArray(rawTask.deliverables),
 					leakGlobs: asStringArray(rawTask.leakGlobs),
 					yardstick: rawTask.yardstick?.trim() || "",
+					verify: rawTask.verify?.trim() || undefined,
 					sourceDir: rawTask.sourceDir
 						? path.resolve(path.dirname(candidate), rawTask.sourceDir)
 						: undefined,
@@ -114,6 +117,7 @@ export interface CreateTaskOptions {
 	domain?: string;
 	deliverables?: string[];
 	yardstick?: string;
+	verify?: string;
 	sourceDir?: string;
 }
 
@@ -130,6 +134,7 @@ export function createTask(cwd: string, home: string, opts: CreateTaskOptions): 
 		deliverables: opts.deliverables ?? [],
 		leakGlobs: [],
 		yardstick: opts.yardstick?.trim() || "",
+		verify: opts.verify?.trim() || "",
 		...(sourceRel ? { sourceDir: sourceRel } : {}),
 	});
 	return loadTaskFromDir(dir);
