@@ -110,6 +110,9 @@ modules, and names that match the upstream Python method where the concepts matc
 
 ## Decision log
 
+The entries below record decisions already present in the code and upstream notes.
+If an attribution is wrong, correct it instead of adding a duplicate.
+
 ```text
 2026-10-13, upstream Harness² (1cfe254e): keep model weights fixed and adapt the
 harness instead.
