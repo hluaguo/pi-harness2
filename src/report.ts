@@ -49,10 +49,14 @@ export function writeReport(
 	const allRuns = new Map<string, (typeof result.baseRuns)[number]>();
 	for (const run of [...result.baseRuns, ...Object.values(modeResult.rollouts)]) allRuns.set(run.label, run);
 	const stageRows = modeResult.stages
-		.map(
-			(s) =>
-				`| \`${s.label}\` | ${s.dim} | ${s.fellBack ? "FELL BACK" : s.keptBase ? "KEEP_BASE" : "changed"} | ${s.cached ? "cached" : "fresh"} | $${s.usd.toFixed(4)} | ${s.error ? s.error.replace(/\|/g, "\\|").slice(0, 160) : ""} |`,
-		)
+		.map((s) => {
+			const source = s.notes.startsWith("skipped composition")
+				? "skipped"
+				: s.cached
+					? "cached"
+					: "fresh";
+			return `| \`${s.label}\` | ${s.dim} | ${s.fellBack ? "FELL BACK" : s.keptBase ? "KEEP_BASE" : "changed"} | ${source} | $${s.usd.toFixed(4)} | ${s.error ? s.error.replace(/\|/g, "\\|").slice(0, 160) : ""} |`;
+		})
 		.join("\n");
 	const rolloutRows = [...allRuns.values()]
 		.map((r) => {
@@ -86,7 +90,7 @@ export function writeReport(
 		"",
 		"> " + task.prompt.trim().replace(/\n/g, "\n> "),
 		"",
-		"## Base probes",
+		"## Rollouts",
 		"",
 		"| label | ok | delivered | verify | changed files | turns | cost | source | error |",
 		"|---|---|---|---|---|---|---|---|---|",

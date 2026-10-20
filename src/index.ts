@@ -138,6 +138,7 @@ interface RunParams {
 	select?: "auto" | "ask" | "first";
 	reflect?: boolean;
 	dryRun?: boolean;
+	earlyStop?: boolean;
 }
 
 interface RunOutcome {
@@ -203,6 +204,7 @@ function buildConfig(
 		seed: params.seed,
 		select: params.select,
 		reflect: params.reflect,
+		earlyStop: params.earlyStop,
 		model: envModel ? undefined : currentModel,
 		improverModel: envImprover ? undefined : currentModel,
 		thinking: ctx.thinkingLevel,
@@ -321,7 +323,7 @@ function helpText(): string {
 
 /harness2 run [--task id] [--prompt "text"] [--k N] [--mode parallel|sequential]
                [--seed N] [--domain name] [--select auto|ask|first]
-               [--no-reflect] [--dry-run]
+               [--no-reflect] [--early-stop] [--dry-run]
 /harness2 init [id]              create a task package
 /harness2 list                   list tasks, runs, and active harness
 /harness2 report [run]           show the latest report
@@ -408,6 +410,9 @@ export default function (pi: ExtensionAPI) {
 				),
 				reflect: Type.Optional(Type.Boolean({ description: "Write a library lesson (default true)" })),
 				dryRun: Type.Optional(Type.Boolean({ description: "Preview selection and cost, no model calls" })),
+				earlyStop: Type.Optional(
+					Type.Boolean({ description: "Stop when k>1 base probes deliver identical artifacts" }),
+				),
 			}),
 			async execute(_toolCallId, params, _signal, onUpdate, ctx) {
 				const outcome = await executeRefine(
@@ -423,6 +428,7 @@ export default function (pi: ExtensionAPI) {
 						select: params.select,
 						reflect: params.reflect,
 						dryRun: params.dryRun,
+						earlyStop: params.earlyStop,
 					},
 					(message) => onUpdate?.({
 						content: [{ type: "text", text: message }],
@@ -499,6 +505,7 @@ export default function (pi: ExtensionAPI) {
 						(flagBool(parsed, "ask") ? "ask" : flagBool(parsed, "no-select") ? "first" : undefined),
 					reflect: flagBool(parsed, "no-reflect") ? false : true,
 					dryRun: flagBool(parsed, "dry-run"),
+					earlyStop: flagBool(parsed, "early-stop") ? true : undefined,
 				};
 				const outcome = await executeRefine(ctx, pi, params);
 				if (outcome.dryRun) {
@@ -587,7 +594,7 @@ export default function (pi: ExtensionAPI) {
 				const harnessDir = path.join(runDir, "harnesses", label);
 				const tree = readTree(harnessDir);
 				if (!Object.keys(tree).length) throw new Error(`harness \`${label}\` is empty`);
-				validate(tree, { alwaysOnMax: cfg.alwaysOnMax, compilePython: false });
+				validate(tree, { alwaysOnMax: cfg.alwaysOnMax, compilePython: true });
 				const data = readJson<any>(path.join(runDir, "result.json"), {});
 				const task: TaskSpec = {
 					id: data?.task?.id ?? path.basename(runDir),
@@ -674,7 +681,7 @@ export default function (pi: ExtensionAPI) {
 				if (!isDir(harnessDir)) throw new Error(`no harness \`${label}\` in ${runDir}`);
 				const tree = readTree(harnessDir);
 				if (!Object.keys(tree).length) throw new Error(`harness \`${label}\` is empty`);
-				validate(tree, { alwaysOnMax: cfg.alwaysOnMax, compilePython: false });
+				validate(tree, { alwaysOnMax: cfg.alwaysOnMax, compilePython: true });
 				writeActive(cfg, {
 					runId: path.basename(runDir),
 					label,

@@ -59,6 +59,11 @@ and records what each edit did: helped, hurt, no observed effect, or confounded.
 It writes at most one lesson for the domain. Later tasks in that domain read the
 lesson before their editors start.
 
+Two cost controls avoid work the evidence does not need. A candidate tree that is
+byte-identical to an earlier probe reuses that probe instead of rolling again.
+If every dimension candidate keeps the base, composition is skipped and no
+composer session is spent. The report marks both cases.
+
 Every probe and every editor is an isolated Pi subprocess. Probes run in a Git
 worktree with your uncommitted changes applied as a local baseline, so `git diff`
 shows exactly what the probe changed. Outside Git, the extension copies the
@@ -111,7 +116,7 @@ Pi's usage events and recorded in the run. Start with `k=1` on a small task. A
 
 | Command | What it does |
 |---|---|
-| `/harness2 run [--task id] [--prompt "text"] [--k N] [--mode parallel\|sequential] [--seed N] [--domain name] [--select auto\|ask\|first] [--no-reflect] [--dry-run]` | Run the recursion |
+| `/harness2 run [--task id] [--prompt "text"] [--k N] [--mode parallel\|sequential] [--seed N] [--domain name] [--select auto\|ask\|first] [--no-reflect] [--early-stop] [--dry-run]` | Run the recursion |
 | `/harness2 init [id] [--prompt "text"] [--domain name] [--deliverables a,b] [--yardstick "text"] [--verify "command"] [--source dir]` | Create a task package |
 | `/harness2 list` | List tasks, runs, library domains, and the active harness |
 | `/harness2 report [run]` | Show a run report |
@@ -265,7 +270,7 @@ All environment variables are optional.
 | `HARNESS2_WORKSPACE_COPY` | `0` | Use a plain copy instead of a Git worktree |
 | `HARNESS2_LIBRARY_SCOPE` | `shared` | `shared` across runs or `run`-local |
 | `HARNESS2_NO_REFLECT` | `0` | Skip reflection |
-| `HARNESS2_EARLY_STOP` | `0` | Stop when base probes produce identical artifacts |
+| `HARNESS2_EARLY_STOP` | `0` | Stop when `k>1` base probes deliver identical artifacts |
 | `HARNESS2_LEAK_MARKERS` | on | Set `0` to disable the grader-marker tripwire |
 | `HARNESS2_PI_BIN` | auto | Explicit Pi executable for child sessions |
 

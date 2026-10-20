@@ -163,7 +163,8 @@ A task is a directory under `.harness2/tasks/<id>/`:
   "domain": "accounting",
   "deliverables": ["reconciliation.xlsx", "notes.md"],
   "leakGlobs": ["*.answer", "expected/*"],
-  "yardstick": "The workbook must tie every unmatched row to a source document."
+  "yardstick": "The workbook must tie every unmatched row to a source document.",
+  "verify": "python3 scripts/check_reconciliation.py"
 }
 ```
 
@@ -174,6 +175,10 @@ A task is a directory under `.harness2/tasks/<id>/`:
   rollout's workspace diff is the deliverable.
 - `yardstick` is optional guidance for what good process looks like. It is *not*
   a score and must describe the work, not its measurement.
+- `verify` is optional. It runs in each probe workspace after the artifact is
+  captured. If at least one candidate passes, only passing candidates enter the
+  selector pool; if none pass, the selector sees every failure. The result is
+  never written into trajectory evidence, so adaptation stays score-free.
 - `leakGlobs` keeps answer keys out of the proposer's evidence tree.
 
 Create one with `/harness2 init`, or pass a prompt directly to
@@ -206,6 +211,9 @@ pi --mode json --no-session -ne -ns -nc -np --no-mcp \
   `[ACTION]`, `[OBSERVATION]`, `[ERROR]`, and `[ASSISTANT]`.
 - Observations are truncated per event (`HARNESS2_OBS_TRUNC`, default 50,000
   chars); trajectories are written in full.
+- If the task declares `verify`, the command runs in the workspace after the
+  deliverable is captured. Its result goes to `rollouts/<label>/verify.json`,
+  never to `trajectory.md`.
 - Workspaces are removed after the deliverable is extracted unless
   `HARNESS2_KEEP_WORKSPACES=1`.
 
@@ -251,6 +259,20 @@ rules that matter most:
 - Never change the artifact's requested shape; guidance that makes reasoning
   visible belongs in the harness or trajectory, not in the deliverable.
 - If the evidence does not support an edit, `KEEP_BASE` is a valid outcome.
+
+### Cost controls
+
+Two cheap checks avoid work the method does not need:
+
+- **Rollout dedup.** A candidate whose tree is byte-identical to an earlier
+  probe reuses that probe's trajectory and deliverable. The report records which
+  label it reused and the run cost counts the probe once.
+- **Composition skip.** If every dimension candidate is identical to the base
+  (or, in sequential mode, to the current checkpoint), the composer session is
+  replaced by a synthetic `KEEP_BASE` stage and no extra probe is spent.
+- **Optional base early stop.** `HARNESS2_EARLY_STOP=1` stops before the editors
+  when `k>1` base probes all delivered identical artifacts. It is off by default
+  because identical artifacts do not prove that a better harness is impossible.
 
 ---
 
@@ -300,6 +322,7 @@ rows and at most one durable lesson, or `NO_ENTRY`.
 │   ├── INDEX.md
 │   └── entries/<task>/harness/ + EXPERIENCE.md
 ├── adopted/<task>/harness/        the last adopted tree
+├── exports/<task>-<run>/          native Pi packages from /harness2 export
 ├── active.json                    the harness currently applied to this project
 └── runs/<run-id>/
     ├── run.json                   configuration + status
@@ -314,6 +337,7 @@ rows and at most one durable lesson, or `NO_ENTRY`.
         ├── events.jsonl
         ├── trajectory.md
         ├── deliverable/
+        ├── verify.json          present when the task declares verify
         └── run.json
 ```
 
@@ -337,17 +361,33 @@ messages update the phase text. Everything clears on completion or failure.
 
 | Command | Purpose |
 |---|---|
-| `/harness2 run [--task id] [--prompt text] [--k N] [--mode parallel\|sequential] [--seed N] [--no-select] [--no-reflect] [--dry-run]` | Run a refinement |
+| `/harness2 run [--task id] [--prompt text] [--k N] [--mode parallel\|sequential] [--seed N] [--no-select] [--no-reflect] [--early-stop] [--dry-run]` | Run a refinement |
 | `/harness2 init [id]` | Create a task package (uses the editor in TUI) |
 | `/harness2 list` | List tasks, runs, and library entries |
 | `/harness2 report [run]` | Print a run report path and summary |
 | `/harness2 adopt [run] [label]` | Copy a final harness to `.harness2/adopted/` |
+| `/harness2 export [run] [label] [--out dir] [--force]` | Export a final as a native Pi package |
 | `/harness2 use [run] [label]` | Apply an adopted harness to this project |
 | `/harness2 use --off` | Stop applying the active harness |
 | `/harness2 help` | Show usage |
 
 The model can call the `harness2_refine` tool with the same options. It returns
 the run ID, adopted label, report path, costs, and the selected deliverable path.
+
+### Exporting a native Pi package
+
+`/harness2 export` writes a Pi package with:
+
+- a generated `extensions/harness2-context.ts` that appends `always-on.md`;
+- the harness's skills and a `package.json` manifest that discovers them;
+- the harness's agents plus a self-contained `extensions/harness2-subagent.ts`;
+- scripts under `scripts/`;
+- plugins under `extensions/plugin-*.ts`;
+- the full original tree under `harness/` for reference.
+
+Install it with `pi install "<dir>"`, remove it with `pi remove "<dir>"`. This
+survives without this extension and is the recommended way to make an adopted
+harness permanent.
 
 When a harness is **active** (`/harness2 use`), this extension:
 
@@ -372,7 +412,7 @@ This is a faithful method port, not a benchmark runner.
 | Separate `judge` and `report` commands with benchmark adapters | Selection is a blind Pi selector; reports are local Markdown/JSON |
 | Per-run library namespaces (`bench-substrate-mode-k-seed`) | Persistent per-domain library, so lessons accumulate across invocations; use `HARNESS2_LIBRARY_SCOPE=run` for per-run isolation |
 | Docker/sandbox execution for WorkBuddy | Runs in a Git worktree on the host. **Network access is unrestricted**, exactly as in the upstream release. |
-| Grader and pass-rate measurement | No grader. Selection compares artifacts; no score is cached or optimized. |
+| Grader and pass-rate measurement | Optional task `verify` command gates selection only; no score is optimized or shown to editors. |
 | Claude CLI / OpenCode proposer channels | Pi proposer subprocesses |
 
 ### Known limitations
@@ -414,6 +454,8 @@ This is a faithful method port, not a benchmark runner.
 | `HARNESS2_LIBRARY_SCOPE` | `shared` | `shared` or `run` |
 | `HARNESS2_NO_REFLECT` | `0` | Skip experience reflection |
 | `HARNESS2_PI_BIN` | auto | Explicit Pi executable for child sessions |
+| `HARNESS2_EARLY_STOP` | `0` | Stop when `k>1` base probes deliver identical artifacts |
+| `HARNESS2_VERIFY_TIMEOUT` | `600` | Seconds per verification command |
 | `HARNESS2_LEAK_MARKERS` | on | Set `0` to disable the grader-marker tripwire |
 
 ---
