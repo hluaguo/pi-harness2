@@ -204,13 +204,14 @@ export async function refine(opts: RefineOptions): Promise<RefineResult> {
 		}
 	}
 
-	const uniqueRuns = new Map<string, RunView>();
+	const billedRuns = new Map<string, RunView>();
 	for (const run of [...baseRuns, ...Object.values(modeResult.rollouts)]) {
-		const key = run.artifactKey ?? run.label;
-		if (!uniqueRuns.has(key)) uniqueRuns.set(key, run);
+		billedRuns.set(run.label, run);
 	}
 	const costs =
-		[...uniqueRuns.values()].reduce((n, r) => n + r.usage.cost, 0) +
+		[...billedRuns.values()]
+			.filter((run) => !run.reusedFrom)
+			.reduce((n, run) => n + run.usage.cost, 0) +
 		modeResult.stages.reduce((n, s) => n + s.usd, 0) +
 		selection.cost;
 
