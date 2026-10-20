@@ -306,9 +306,24 @@ When a skill has no trigger line, the validator can add one if there is room.
 
 ```bash
 npm install --ignore-scripts
-npx tsc --noEmit
+npm run verify
 pi -e ./src/index.ts --help
 ```
+
+`npm run verify` runs three gates:
+
+- `npm run lint` runs oxlint over `src` and `test`.
+- `npm run check` runs `tsc --noEmit`.
+- `npm test` runs the Node test runner.
+
+The probe test starts a real Pi child process through `test/support/pi-faux.ts`.
+That adapter uses pi-ai's faux provider, so tests make no model API calls and need
+no credentials. Set `HARNESS2_FAUX_FILE` and `HARNESS2_FAUX_CONTENT` to script the
+write tool call the faux agent makes.
+
+The suite covers the harness allowlist and validator, verification gating,
+workspace isolation, and one probe round trip. It does not cover the editor,
+selector, or reflection sessions yet.
 
 See [AGENTS.md](AGENTS.md) for the coding rules used in this repository.
 

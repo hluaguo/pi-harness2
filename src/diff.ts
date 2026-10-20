@@ -19,7 +19,7 @@ export function unifiedDiff(
 	}
 	const n = a.length;
 	const m = b.length;
-	const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	const dp: number[][] = Array.from({ length: n + 1 }, () => Array.from({ length: m + 1 }, () => 0));
 	for (let i = n - 1; i >= 0; i--) {
 		for (let j = m - 1; j >= 0; j--) {
 			dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
@@ -46,7 +46,7 @@ export function unifiedDiff(
 	while (j < m) ops.push({ type: "+", text: b[j++], ai: i, bi: j });
 
 	if (!ops.some((op) => op.type !== " ")) return "";
-	const keep = new Array(ops.length).fill(false);
+	const keep = Array.from({ length: ops.length }, () => false);
 	ops.forEach((op, idx) => {
 		if (op.type === " ") return;
 		for (let k = Math.max(0, idx - context); k <= Math.min(ops.length - 1, idx + context); k++) {

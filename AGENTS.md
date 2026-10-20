@@ -42,9 +42,14 @@ Prefer one small end-to-end check over a large mocked suite for orchestration.
 Most of the risk here is subprocess and filesystem behavior, and mocks would skip
 exactly the part that breaks.
 
-There is no test runner in the repository right now. `npm run check` is the
-current gate. If you add a runner, record that decision below and keep the first
-suite small. Do not add a coverage target.
+The repository uses `node:test`. `npm run verify` runs oxlint, `tsc --noEmit`, and
+the tests. Keep the suite small and add a test when a boundary fails or when a
+change to the harness surface could silently break probes. Do not add a coverage
+target.
+
+Anything that needs an agent must use pi-ai's faux provider. `test/support/pi-faux.ts`
+is the current adapter for probe tests. Do not call a real model API from a test,
+and do not make a test depend on credentials.
 
 When you fix a bug, add the smallest reproduction that would have caught it. If
 that is impractical, write the manual reproduction in the commit message or pull
@@ -191,11 +196,17 @@ the run would spend editor sessions for no result. The default stays off until
 enough runs show the signal is reliable.
 Evidence: baseNoSignal in src/recursion.ts.
 
-2026-10-20, maintainer: ship without a unit test runner in the first version.
+2026-10-20, maintainer: the first version shipped without a unit test runner.
 Why: the risky behavior is subprocess and filesystem work that mocks would not
-exercise, and manual end-to-end runs gave more signal. Add a runner when a
-concrete failure needs one.
+exercise, and manual end-to-end runs gave more signal.
 Evidence: package.json, scripts/check.
+
+2026-10-20, maintainer: add node:test, oxlint, and a faux-provider probe test.
+Why: tsc alone cannot catch unused imports or style regressions, and manual runs
+do not protect the workspace and validation boundaries. The probe test runs the
+real child-session path against pi-ai's faux provider, so it stays offline and
+deterministic. This supersedes the first-version no-runner note above.
+Evidence: package.json scripts, test/probe.test.ts, test/support/pi-faux.ts.
 ```
 
 ## Proposed

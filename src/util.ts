@@ -270,7 +270,7 @@ export async function mapLimit<T, R>(
 ): Promise<R[]> {
 	if (items.length === 0) return [];
 	const width = Math.max(1, Math.min(limit, items.length));
-	const out = new Array<R>(items.length);
+	const out = Array.from({ length: items.length }, () => undefined as R);
 	let next = 0;
 	const workers = Array.from({ length: width }, async () => {
 		while (true) {

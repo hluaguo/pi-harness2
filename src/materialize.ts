@@ -17,7 +17,6 @@ import {
 	rmrf,
 	safeJoin,
 	slugify,
-	writeJson,
 	writeText,
 } from "./util.ts";
 
@@ -85,7 +84,7 @@ export function exportHarness(opts: ExportOptions): ExportResult {
 	for (const rel of Object.keys(tree).filter((key) => key.startsWith("agents/")).sort()) {
 		put(rel, tree[rel]);
 	}
-	for (const rel of Object.keys(tree).filter((key) => /^scripts\//.test(key)).sort()) {
+	for (const rel of Object.keys(tree).filter((key) => key.startsWith("scripts/")).sort()) {
 		put(rel, tree[rel]);
 	}
 	const plugins = pluginFiles(tree);

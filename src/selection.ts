@@ -18,6 +18,7 @@ import { Proposer, parseFenced } from "./proposer.ts";
 import { buildSelectionContext } from "./context.ts";
 import { profileOf, select } from "./prompts.ts";
 import { copyDir, readText, rmrf, truncate } from "./util.ts";
+import { verificationGate } from "./verify-gate.ts";
 
 export interface SelectOptions {
 	cfg: H2Config;
@@ -89,21 +90,9 @@ export async function runSelection(opts: SelectOptions): Promise<SelectionResult
 	).map((c, i) => ({ ...c, id: `c${i + 1}` }));
 	const poolsAll = candidates.map((x) => ({ id: x.id, label: x.label }));
 
-	const hasVerification = candidates.some((c) => c.verify);
-	const passing = candidates.filter((c) => c.verify?.ok);
-	const failing = candidates.filter((c) => c.verify && !c.verify.ok);
-	const gated = hasVerification && passing.length > 0 && passing.length < candidates.length;
-	let pool = gated ? passing : candidates;
-	// If no candidate passes, the selector still decides, but sees every failure.
-	if (hasVerification && passing.length === 0) pool = candidates;
-
-	const verified = hasVerification
-		? {
-				gated,
-				passing: passing.map((c) => c.label),
-				failing: failing.map((c) => c.label),
-			}
-		: undefined;
+	const gate = verificationGate(candidates);
+	const { pool, gated, hasVerification, passing, failing } = gate;
+	const verified = hasVerification ? { gated, passing, failing } : undefined;
 
 	if (pool.length === 1) {
 		const c = pool[0];
